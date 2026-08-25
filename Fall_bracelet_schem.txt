@@ -1,0 +1,13 @@
+ESP32
+
+-> Buzzer
+
+-> Heartbeat
+
+-> Shock sensor
+
+-> touch sensor
+exterior sau unul din pini capacitive ai esp-ului
+
+-> 2 x 2-color led
+
