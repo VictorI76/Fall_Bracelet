@@ -2,14 +2,18 @@
 
 // Constants
 #define MAIN_CORE 1
-#define GENERAL_DELAY 1000005
+#define GENERAL_DELAY 1005000
 #define SERIAL_QUEUE_LENGTH 20
 #define WORD_SIZE 20
 
 // Pins
-static uint8_t pinHeartBeat = 27;
+static uint8_t pinHeartBeat = 34;
+static uint8_t pinShock = 35;
+static uint8_t ledBuiltIn = 2;
 
 // Variables
+
+// Heart Sensor
 static uint16_t heartRate = 0;
 static uint8_t avgHeartRateCount = 0;
 static uint8_t heartRateAvgCountTop = 3;
@@ -23,13 +27,18 @@ static uint32_t avgBPM = 0;
 static uint32_t avgBPMSum = 0;
 static uint32_t countRegBPM = 0;
 
-// Timer
-static TimerHandle_t timer = NULL;
+// Shock Sensor
+static uint16_t shocksCounter = 0;
 
-// Timer parameters
-static const uint16_t timer_divider = 40; // => 2MHz
-static const uint64_t timer_max_count = 100000; // => 50ms
-static hw_timer_t *timer_hw = NULL;
+
+// Led built in
+uint8_t status = 0;
+
+// Timer 0
+static const uint16_t timer_divider0 = 40;
+static const uint64_t timer_frequency0 = 1000000; // => 1MHz
+static const uint64_t timer_max_count0 = 1000000; // => 1s
+static hw_timer_t *timer_hw0 = NULL;
 
 // Spinlock
 portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
@@ -37,9 +46,13 @@ portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
 // Semaphore
 static SemaphoreHandle_t semHeartBeat_ISR = NULL;
 static SemaphoreHandle_t semHeartBeat_Mutex = NULL;
+static SemaphoreHandle_t semShockSensor_ISR = NULL;
 
 // Queue
 static QueueHandle_t serialQueue;
+
+// Functions
+void blinkLed(uint8_t times, uint8_t pin);
 
 // Task
 void taskHeartBeat(void *parameter);
@@ -50,26 +63,31 @@ void taskLedLight(void *parameter);
 void taskWriteToSerial(void *parameter);
 
 // ISR
-void IRAM_ATTR onTimer();
+void IRAM_ATTR onTimer0(void);
+void IRAM_ATTR onShock();
 
 void setup() {
+
+    // Serial
     Serial.begin(115200);
 
+    // Pins
     pinMode(pinHeartBeat, INPUT);
+    pinMode(pinShock, INPUT);
+    pinMode(ledBuiltIn, OUTPUT);
 
-    // Timer
-    timer_hw = timerBegin(0, timer_divider, true);
+    // Timer 0
+    timer_hw0 = timerBegin(timer_frequency0);
+    timerAttachInterrupt(timer_hw0, &onTimer0);
+    timerAlarm(timer_hw0, timer_max_count0, true, 0);
 
-    timerAttachInterrupt(timer_hw, &onTimer, true);
-
-    timerAlarmWrite(timer_hw, timer_max_count, true);
-
-    timerAlarmEnable(timer_hw);
-
+    // Shock
+    attachInterrupt(digitalPinToInterrupt(pinShock), &onShock, RISING);
 
     // Semaphore
     semHeartBeat_ISR = xSemaphoreCreateBinary();
     semHeartBeat_Mutex = xSemaphoreCreateMutex();
+    semShockSensor_ISR = xSemaphoreCreateBinary();
 
     // Queue
     serialQueue = xQueueCreate(SERIAL_QUEUE_LENGTH, sizeof(char) * WORD_SIZE);
@@ -95,6 +113,15 @@ void setup() {
         MAIN_CORE
     );
 
+    xTaskCreatePinnedToCore (
+        taskShockSensor,
+        "Shock sensor triggered",
+        1024,
+        NULL,
+        1,
+        NULL,
+        MAIN_CORE
+    );
 
     Serial.println("Start scanning!");
 }
@@ -105,7 +132,7 @@ void loop() {
 
 
 // ISR
-void IRAM_ATTR onTimer() {
+void IRAM_ATTR onTimer0(void) {
     BaseType_t task_woken = pdFALSE;
 
     heartRate = analogRead(pinHeartBeat);
@@ -127,6 +154,18 @@ void IRAM_ATTR onTimer() {
     if (heartBeatCountTop == readHreatBeatCount) {
         xSemaphoreGiveFromISR(semHeartBeat_ISR, &task_woken);
         readHreatBeatCount = 0;
+    }
+
+    if (task_woken) {
+        portYIELD_FROM_ISR();
+    }
+}
+
+void IRAM_ATTR onShock() {
+    BaseType_t task_woken = pdFALSE;
+
+    shocksCounter++;
+    if (xSemaphoreGiveFromISR(semShockSensor_ISR, &task_woken) == pdTRUE) {
     }
 
     if (task_woken) {
@@ -200,6 +239,30 @@ void taskWriteToSerial(void *parameter) {
         }
     }
 }
+
+void taskShockSensor(void *parameter) {
+    char msg[] = "Shock detected!\n";
+
+    while(1) {
+        if (xSemaphoreTake(semShockSensor_ISR, GENERAL_DELAY) == pdTRUE) {
+            xQueueSend(serialQueue, msg, GENERAL_DELAY);
+            blinkLed(5, ledBuiltIn);
+        }
+    }
+}
+
+
+// Funcctions
+
+void blinkLed(uint8_t times, uint8_t pin){
+    for (uint8_t i = 0;i < times;i++) {
+        digitalWrite(pin, HIGH);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        digitalWrite(pin, LOW);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
 
 
 
