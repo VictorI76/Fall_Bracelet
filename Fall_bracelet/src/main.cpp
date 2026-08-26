@@ -9,26 +9,27 @@
 // Pins
 static uint8_t pinHeartBeat = 34;
 static uint8_t pinShock = 35;
+static uint8_t pinTouch = 36;
 static uint8_t ledBuiltIn = 2;
 
 // Variables
 
 // Heart Sensor
-static uint16_t heartRate = 0;
-static uint8_t avgHeartRateCount = 0;
-static uint8_t heartRateAvgCountTop = 3;
-static uint16_t avgHeartRate = 0;
-static uint16_t lastAvgHeartRate = 0;
-static uint8_t avgHeartRateError = 50;
-static uint8_t readHreatBeatCount = 0;
-static uint8_t heartBeatCountTop = 20;
-static uint8_t BPM = 0;
+volatile static uint16_t heartRate = 0;
+volatile static uint8_t avgHeartRateCount = 0;
+volatile static uint8_t heartRateAvgCountTop = 3;
+volatile static uint16_t avgHeartRate = 0;
+volatile static uint16_t lastAvgHeartRate = 0;
+volatile static uint8_t avgHeartRateError = 50;
+volatile static uint8_t readHreatBeatCount = 0;
+volatile static uint8_t heartBeatCountTop = 20;
+volatile static uint8_t BPM = 0;
 static uint32_t avgBPM = 0;
 static uint32_t avgBPMSum = 0;
 static uint32_t countRegBPM = 0;
 
 // Shock Sensor
-static uint16_t shocksCounter = 0;
+volatile static uint16_t shocksCounter = 0;
 
 
 // Led built in
@@ -44,15 +45,16 @@ static hw_timer_t *timer_hw0 = NULL;
 portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
 
 // Semaphore
-static SemaphoreHandle_t semHeartBeat_ISR = NULL;
+volatile static SemaphoreHandle_t semHeartBeat_ISR = NULL;
 static SemaphoreHandle_t semHeartBeat_Mutex = NULL;
-static SemaphoreHandle_t semShockSensor_ISR = NULL;
+volatile static SemaphoreHandle_t semShockSensor_ISR = NULL;
+volatile static SemaphoreHandle_t semTouchSensor_ISR = NULL;
 
 // Queue
 static QueueHandle_t serialQueue;
 
 // Functions
-void blinkLed(uint8_t times, uint8_t pin);
+void blinkLed(uint8_t times, uint8_t pin, uint16_t blinkTime);
 
 // Task
 void taskHeartBeat(void *parameter);
@@ -65,6 +67,7 @@ void taskWriteToSerial(void *parameter);
 // ISR
 void IRAM_ATTR onTimer0(void);
 void IRAM_ATTR onShock();
+void IRAM_ATTR onTouch();
 
 void setup() {
 
@@ -74,6 +77,7 @@ void setup() {
     // Pins
     pinMode(pinHeartBeat, INPUT);
     pinMode(pinShock, INPUT);
+    pinMode(pinTouch, INPUT);
     pinMode(ledBuiltIn, OUTPUT);
 
     // Timer 0
@@ -82,12 +86,16 @@ void setup() {
     timerAlarm(timer_hw0, timer_max_count0, true, 0);
 
     // Shock
-    attachInterrupt(digitalPinToInterrupt(pinShock), &onShock, RISING);
+    attachInterrupt(digitalPinToInterrupt(pinShock), &onShock, FALLING);
+
+    // Touch
+    attachInterrupt(digitalPinToInterrupt(pinTouch), &onTouch, RISING);
 
     // Semaphore
     semHeartBeat_ISR = xSemaphoreCreateBinary();
     semHeartBeat_Mutex = xSemaphoreCreateMutex();
     semShockSensor_ISR = xSemaphoreCreateBinary();
+    semTouchSensor_ISR = xSemaphoreCreateBinary();
 
     // Queue
     serialQueue = xQueueCreate(SERIAL_QUEUE_LENGTH, sizeof(char) * WORD_SIZE);
@@ -98,7 +106,7 @@ void setup() {
         "Read the heart rate",
         2048,
         NULL,
-        1,
+        2,
         NULL,
         MAIN_CORE
     );
@@ -118,7 +126,17 @@ void setup() {
         "Shock sensor triggered",
         1024,
         NULL,
-        1,
+        3,
+        NULL,
+        MAIN_CORE
+    );
+
+    xTaskCreatePinnedToCore (
+        taskTouchSensor,
+        "Touch sensor pressed",
+        1024,
+        NULL,
+        3,
         NULL,
         MAIN_CORE
     );
@@ -137,18 +155,18 @@ void IRAM_ATTR onTimer0(void) {
 
     heartRate = analogRead(pinHeartBeat);
     
-    avgHeartRate += heartRate;
-    avgHeartRateCount++;
+    avgHeartRate = avgHeartRate + heartRate;
+    avgHeartRateCount = avgHeartRateCount + 1;
     if (avgHeartRateCount == heartRateAvgCountTop) {
         avgHeartRate = avgHeartRate / heartRateAvgCountTop;
         avgHeartRateCount = 0;
 
         if (abs(lastAvgHeartRate - avgHeartRate) > avgHeartRateError) {
-            BPM++;
+            BPM = BPM + 1;
         }
 
         lastAvgHeartRate = avgHeartRate;
-        readHreatBeatCount++;
+        readHreatBeatCount = readHreatBeatCount + 1;
     }
 
     if (heartBeatCountTop == readHreatBeatCount) {
@@ -164,14 +182,28 @@ void IRAM_ATTR onTimer0(void) {
 void IRAM_ATTR onShock() {
     BaseType_t task_woken = pdFALSE;
 
-    shocksCounter++;
-    if (xSemaphoreGiveFromISR(semShockSensor_ISR, &task_woken) == pdTRUE) {
+    shocksCounter = shocksCounter + 1;
+    if (xSemaphoreGiveFromISR(semShockSensor_ISR, &task_woken) != pdTRUE) {
+        Serial.println("Shock sensor ISR could't send the semaphore!");
     }
 
     if (task_woken) {
         portYIELD_FROM_ISR();
     }
 }
+
+void IRAM_ATTR onTouch() {
+    BaseType_t task_woken = pdFALSE;
+
+    if (xSemaphoreGiveFromISR(semTouchSensor_ISR, &task_woken) != pdTRUE) {
+        Serial.println("Touch sensor ISR could't send the semaphore!");
+    }
+
+    if (task_woken) {
+        portYIELD_FROM_ISR();
+    }
+}
+
 
 
 // Task
@@ -192,7 +224,7 @@ void taskHeartBeat(void *parameter) {
             avgBPMSerial = 0;
 
             if (xSemaphoreTake(semHeartBeat_Mutex, GENERAL_DELAY) == pdTRUE) {
-                BPM *= 15;
+                BPM = BPM * 15;
                 avgBPMSum += BPM;
                 countRegBPM++;
                 if (countRegBPM == 20) {
@@ -246,7 +278,20 @@ void taskShockSensor(void *parameter) {
     while(1) {
         if (xSemaphoreTake(semShockSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            blinkLed(5, ledBuiltIn);
+            blinkLed(5, ledBuiltIn, 500);
+        }
+    }
+}
+
+void taskTouchSensor(void *parameter) {
+    char msg[] = "Touch sensor t:)\n";
+
+    while (1) {
+        if (xSemaphoreTake(semTouchSensor_ISR, GENERAL_DELAY) == pdTRUE) {
+            gpio_intr_disable((gpio_num_t)pinTouch);
+            xQueueSend(serialQueue, msg, GENERAL_DELAY);
+            blinkLed(5, ledBuiltIn, 200);
+            gpio_intr_enable((gpio_num_t)pinTouch);
         }
     }
 }
@@ -254,12 +299,12 @@ void taskShockSensor(void *parameter) {
 
 // Funcctions
 
-void blinkLed(uint8_t times, uint8_t pin){
+void blinkLed(uint8_t times, uint8_t pin, uint16_t blinkTime){
     for (uint8_t i = 0;i < times;i++) {
         digitalWrite(pin, HIGH);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(blinkTime));
         digitalWrite(pin, LOW);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(blinkTime));
     }
 }
 
