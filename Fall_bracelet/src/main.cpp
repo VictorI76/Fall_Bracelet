@@ -6,6 +6,16 @@
 #define SERIAL_QUEUE_LENGTH 20
 #define WORD_SIZE 20
 
+//  Task ON/OFF
+#define HEART_SWITCH true
+#define WRITE_SERIAL_SWITCH true
+#define SHOCK_SWITCH false
+#define TOUCH_SWITCH false
+#define LED_SWITCH false
+
+// static functions
+#define sgn(x, y) (((x) < (y)) ? -1 : 1)
+
 // Pins
 static uint8_t pinHeartBeat = 34;
 static uint8_t pinShock = 35;
@@ -15,18 +25,24 @@ static uint8_t ledBuiltIn = 2;
 // Variables
 
 // Heart Sensor
-volatile static uint16_t heartRate = 0;
+volatile static uint32_t heartRate = 0;
 volatile static uint8_t avgHeartRateCount = 0;
 volatile static uint8_t heartRateAvgCountTop = 3;
 volatile static uint16_t avgHeartRate = 0;
 volatile static uint16_t lastAvgHeartRate = 0;
-volatile static uint8_t avgHeartRateError = 50;
-volatile static uint8_t readHreatBeatCount = 0;
-volatile static uint8_t heartBeatCountTop = 20;
+volatile static uint8_t avgHeartRateErrorMAX = 50;
+volatile static uint8_t avgHeartRateErrorMIN = 20;
+volatile static uint8_t heartBeatCount = 0;
+volatile static uint8_t heartBeatCountTop = 65;
 volatile static uint8_t BPM = 0;
 static uint32_t avgBPM = 0;
 static uint32_t avgBPMSum = 0;
 static uint32_t countRegBPM = 0;
+
+volatile static uint32_t currValue;
+volatile static uint32_t lastValue;
+volatile static uint32_t direction;
+volatile static uint16_t timeOut = 3;
 
 // Shock Sensor
 volatile static uint16_t shocksCounter = 0;
@@ -36,9 +52,9 @@ volatile static uint16_t shocksCounter = 0;
 uint8_t status = 0;
 
 // Timer 0
-static const uint16_t timer_divider0 = 40;
+static const uint16_t timer_divider0 = 80;
 static const uint64_t timer_frequency0 = 1000000; // => 1MHz
-static const uint64_t timer_max_count0 = 1000000; // => 1s
+static const uint64_t timer_max_count0 = 100000; // => 100ms
 static hw_timer_t *timer_hw0 = NULL;
 
 // Spinlock
@@ -101,45 +117,53 @@ void setup() {
     serialQueue = xQueueCreate(SERIAL_QUEUE_LENGTH, sizeof(char) * WORD_SIZE);
 
     // Tasks
-    xTaskCreatePinnedToCore (
-        taskHeartBeat,
-        "Read the heart rate",
-        2048,
-        NULL,
-        2,
-        NULL,
-        MAIN_CORE
-    );
+    if (HEART_SWITCH) {
+        xTaskCreatePinnedToCore (
+            taskHeartBeat,
+            "Read the heart rate",
+            2048,
+            NULL,
+            2,
+            NULL,
+            MAIN_CORE
+        );
+    }
 
-    xTaskCreatePinnedToCore (
-        taskWriteToSerial,
-        "Write to serial",
-        1024,
-        NULL,
-        1,
-        NULL,
-        MAIN_CORE
-    );
+    if (WRITE_SERIAL_SWITCH) {
+        xTaskCreatePinnedToCore (
+            taskWriteToSerial,
+            "Write to serial",
+            1024,
+            NULL,
+            1,
+            NULL,
+            MAIN_CORE
+        );
+    }
 
-    xTaskCreatePinnedToCore (
-        taskShockSensor,
-        "Shock sensor triggered",
-        1024,
-        NULL,
-        3,
-        NULL,
-        MAIN_CORE
-    );
+    if (SHOCK_SWITCH) {
+        xTaskCreatePinnedToCore (
+            taskShockSensor,
+            "Shock sensor triggered",
+            1024,
+            NULL,
+            3,
+            NULL,
+            MAIN_CORE
+        );
+    }
 
-    xTaskCreatePinnedToCore (
-        taskTouchSensor,
-        "Touch sensor pressed",
-        1024,
-        NULL,
-        3,
-        NULL,
-        MAIN_CORE
-    );
+    if (TOUCH_SWITCH) {
+        xTaskCreatePinnedToCore (
+            taskTouchSensor,
+            "Touch sensor pressed",
+            1024,
+            NULL,
+            3,
+            NULL,
+            MAIN_CORE
+        );
+    }
 
     Serial.println("Start scanning!");
 }
@@ -150,30 +174,54 @@ void loop() {
 
 
 // ISR
+/*
+This function need to be modified to calculate a low and a top and the diferance between them => puls
+hearRate will read the current value
+currValue
+lastValue
+direction
+
+Be carefull to the double beat => poze for 300ms
+*/
 void IRAM_ATTR onTimer0(void) {
     BaseType_t task_woken = pdFALSE;
 
     heartRate = analogRead(pinHeartBeat);
-    
-    avgHeartRate = avgHeartRate + heartRate;
-    avgHeartRateCount = avgHeartRateCount + 1;
-    if (avgHeartRateCount == heartRateAvgCountTop) {
-        avgHeartRate = avgHeartRate / heartRateAvgCountTop;
-        avgHeartRateCount = 0;
 
-        if (abs(lastAvgHeartRate - avgHeartRate) > avgHeartRateError) {
-            BPM = BPM + 1;
+    // char aux[WORD_SIZE];
+
+    // itoa(heartRate, aux, 10);
+    // strcat(aux, ",");
+
+    // xQueueSendFromISR(serialQueue, aux, &task_woken);
+
+    if (heartRate > 500 && timeOut <= 0) {
+        
+        currValue = heartRate;
+
+        if (sgn(currValue, lastValue) == direction) {
+            lastValue = currValue;
+        } else {
+            
+            if (sgn(currValue, lastValue) == -1) {
+                BPM++;
+                timeOut = 3;
+            }
+
+            direction = direction * -1;
+            lastValue = currValue;
         }
 
-        lastAvgHeartRate = avgHeartRate;
-        readHreatBeatCount = readHreatBeatCount + 1;
+    } else if (timeOut > 0) {
+        timeOut = timeOut - 1;
     }
 
-    if (heartBeatCountTop == readHreatBeatCount) {
+    heartBeatCount++;
+    if (heartBeatCount == heartBeatCountTop) {
         xSemaphoreGiveFromISR(semHeartBeat_ISR, &task_woken);
-        readHreatBeatCount = 0;
+        heartBeatCount = 0;
     }
-
+    
     if (task_woken) {
         portYIELD_FROM_ISR();
     }
@@ -224,11 +272,11 @@ void taskHeartBeat(void *parameter) {
             avgBPMSerial = 0;
 
             if (xSemaphoreTake(semHeartBeat_Mutex, GENERAL_DELAY) == pdTRUE) {
-                BPM = BPM * 15;
+                BPM = BPM * 6;
                 avgBPMSum += BPM;
                 countRegBPM++;
-                if (countRegBPM == 20) {
-                    avgBPM = avgBPMSum / 20;
+                if (countRegBPM == 10) {
+                    avgBPM = avgBPMSum / 10;
                     countRegBPM = 0;
                     avgBPMSum = 0;
                 }
