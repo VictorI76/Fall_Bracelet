@@ -5,6 +5,7 @@
 #define GENERAL_DELAY 1005000
 #define SERIAL_QUEUE_LENGTH 20
 #define WORD_SIZE 20
+#define LED_BUILT_IN 2
 
 //  Task ON/OFF
 #define HEART_SWITCH true
@@ -34,8 +35,8 @@ volatile static uint8_t avgHeartRateErrorMAX = 50;
 volatile static uint8_t avgHeartRateErrorMIN = 20;
 volatile static uint8_t heartBeatCount = 0;
 volatile static uint8_t heartBeatCountTop = 65;
-volatile static uint8_t BPM = 0;
-static uint32_t avgBPM = 0;
+volatile static unsigned int BPM = 0;
+volatile static unsigned long int avgBPM = 0;
 static uint32_t avgBPMSum = 0;
 static uint32_t countRegBPM = 0;
 
@@ -46,7 +47,6 @@ volatile static uint16_t timeOut = 3;
 
 // Shock Sensor
 volatile static uint16_t shocksCounter = 0;
-
 
 // Led built in
 uint8_t status = 0;
@@ -71,6 +71,9 @@ static QueueHandle_t serialQueue;
 
 // Functions
 void blinkLed(uint8_t times, uint8_t pin, uint16_t blinkTime);
+
+// Task Handle
+TaskHandle_t lightTaskHandle;
 
 // Task
 void taskHeartBeat(void *parameter);
@@ -163,6 +166,20 @@ void setup() {
             NULL,
             MAIN_CORE
         );
+    }
+
+    if (LED_SWITCH) {
+        xTaskCreatePinnedToCore(
+            taskLedLight,
+            "A blinking routine with the leds",
+            1024,
+            NULL,
+            1,
+            &lightTaskHandle,
+            MAIN_CORE
+        );
+
+        vTaskSuspend(lightTaskHandle);
     }
 
     Serial.println("Start scanning!");
@@ -258,8 +275,8 @@ void IRAM_ATTR onTouch() {
 void taskHeartBeat(void *parameter) {
     Serial.println("Reading heart beat!");
 
-    uint8_t BPMSerial;
-    uint32_t avgBPMSerial;
+    unsigned int BPMSerial;
+    unsigned long int avgBPMSerial;
     char auxToSerial[WORD_SIZE * 3];
     memset(auxToSerial, 0, WORD_SIZE * 3);
     memset(&avgBPMSerial, 0, sizeof(uint32_t));
@@ -290,11 +307,9 @@ void taskHeartBeat(void *parameter) {
                 xSemaphoreGive(semHeartBeat_Mutex);
             }
 
-            unsigned int toPrintBPM = BPMSerial;
-            unsigned long int toPrintAvgBPM = avgBPMSerial;
             memset(auxToSerial, 0, WORD_SIZE * 3);
 
-            sprintf(auxToSerial, "BPM: %u AVG BPM: %lu \n\0", toPrintBPM, avgBPMSerial);
+            sprintf(auxToSerial, "BPM: %u AVG BPM: %lu", BPMSerial, avgBPMSerial);
 
             for (uint8_t i = 0;i < WORD_SIZE * 3;i += WORD_SIZE) {
                 if (xQueueSend(serialQueue, auxToSerial + i, GENERAL_DELAY) != pdTRUE) {
@@ -314,7 +329,7 @@ void taskWriteToSerial(void *parameter) {
         if (Serial.available()) {
             memset(msg, 0, WORD_SIZE);
             if (xQueueReceive(serialQueue, msg, GENERAL_DELAY)) {
-                Serial.print(msg);
+                Serial.println(msg);
             }   
         }
     }
@@ -326,7 +341,7 @@ void taskShockSensor(void *parameter) {
     while(1) {
         if (xSemaphoreTake(semShockSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            blinkLed(5, ledBuiltIn, 500);
+            vTaskResume(lightTaskHandle);
         }
     }
 }
@@ -338,9 +353,19 @@ void taskTouchSensor(void *parameter) {
         if (xSemaphoreTake(semTouchSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             gpio_intr_disable((gpio_num_t)pinTouch);
             xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            blinkLed(5, ledBuiltIn, 200);
+            vTaskSuspend(lightTaskHandle);
             gpio_intr_enable((gpio_num_t)pinTouch);
         }
+    }
+}
+
+void taskLedLight(void *parameter) {
+    uint16_t blinkTime = 500;
+    while (1) {
+        digitalWrite(LED_BUILT_IN, HIGH);
+        vTaskDelay(pdMS_TO_TICKS(blinkTime));
+        digitalWrite(LED_BUILT_IN, LOW);
+        vTaskDelay(pdMS_TO_TICKS(blinkTime));
     }
 }
 
