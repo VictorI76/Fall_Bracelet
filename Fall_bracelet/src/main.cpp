@@ -1,12 +1,9 @@
 #include <Arduino.h>
-// #include "task.h"
+#include "task_and_dependencies.h"
 
 // Constants
 #define MAIN_CORE 1
-#define GENERAL_DELAY 1005000
 #define SERIAL_QUEUE_LENGTH 20
-#define WORD_SIZE 20
-#define LED_BUILT_IN 2
 
 //  Task ON/OFF
 #define HEART_SWITCH false
@@ -20,8 +17,6 @@
 
 // Pins
 static uint8_t pinHeartBeat = 34;
-static uint8_t pinShock = 35;
-static uint8_t pinTouch = 36; //
 
 // Variables
 
@@ -29,16 +24,10 @@ static uint8_t pinTouch = 36; //
 volatile static uint32_t heartRate = 0;
 volatile static uint8_t avgHeartRateCount = 0;
 volatile static uint8_t heartRateAvgCountTop = 3;
-volatile static uint16_t avgHeartRate = 0; //
-volatile static uint16_t lastAvgHeartRate = 0; //
 volatile static uint8_t avgHeartRateErrorMAX = 50;
 volatile static uint8_t avgHeartRateErrorMIN = 20;
 volatile static uint8_t heartBeatCount = 0;
 volatile static uint8_t heartBeatCountTop = 65;
-volatile static unsigned int BPM = 0; //
-volatile static unsigned long int avgBPM = 0; //
-static uint32_t avgBPMSum = 0; //
-static uint32_t countRegBPM = 0; //
 
 volatile static uint32_t currValue;
 volatile static uint32_t lastValue;
@@ -56,10 +45,6 @@ volatile static uint64_t pressTime = 0;
 volatile static uint64_t lastPressTime = 0;
 volatile static uint8_t pressPouse = 100;
 
-
-// Led built in
-uint8_t status = 0;
-
 // Timer 0
 static const uint16_t timer_divider0 = 80;
 static const uint64_t timer_frequency0 = 1000000; // => 1MHz
@@ -68,28 +53,6 @@ static hw_timer_t *timer_hw0 = NULL;
 
 // Spinlock
 portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
-
-// Semaphore
-volatile static SemaphoreHandle_t semHeartBeat_ISR = NULL; //
-static SemaphoreHandle_t semHeartBeat_Mutex = NULL; //
-volatile static SemaphoreHandle_t semShockSensor_ISR = NULL; //
-volatile static SemaphoreHandle_t semTouchSensor_ISR = NULL; //
-
-// Queue
-static QueueHandle_t serialQueue; //
-
-// Functions
-
-// Task Handle
-TaskHandle_t lightTaskHandle; //
-
-// Task
-void taskHeartBeat(void *parameter);
-void taskShockSensor(void *parameter);
-void taskTouchSensor(void *parameter);
-void taskBuzzerMusic(void *parameter);
-void taskLedLight(void *parameter);
-void taskWriteToSerial(void *parameter);
 
 // ISR
 void IRAM_ATTR onTimer0(void);
@@ -199,15 +162,6 @@ void loop() {
 
 
 // ISR
-/*
-This function need to be modified to calculate a low and a top and the diferance between them => puls
-hearRate will read the current value
-currValue
-lastValue
-direction
-
-Be carefull to the double beat => In a pause for 300ms
-*/
 void IRAM_ATTR onTimer0(void) {
     BaseType_t task_woken = pdFALSE;
 
@@ -284,111 +238,6 @@ void IRAM_ATTR onTouch(void) {
         lastPressTime = pressTime;
     }
 }
-
-
-
-// Task
-void taskHeartBeat(void *parameter) {
-    Serial.println("Reading heart beat!");
-
-    unsigned int BPMSerial;
-    unsigned long int avgBPMSerial;
-    char auxToSerial[WORD_SIZE * 3];
-    memset(auxToSerial, 0, WORD_SIZE * 3);
-    memset(&avgBPMSerial, 0, sizeof(uint32_t));
-    memset(&BPMSerial, 0, sizeof(uint8_t));
-
-    while (1) {
-        if (xSemaphoreTake(semHeartBeat_ISR, GENERAL_DELAY) == pdTRUE) {
-
-            BPMSerial = 0;
-            avgBPMSerial = 0;
-
-            if (xSemaphoreTake(semHeartBeat_Mutex, GENERAL_DELAY) == pdTRUE) {
-                BPM = BPM * 6;
-                avgBPMSum += BPM;
-                countRegBPM++;
-                if (countRegBPM == 10) {
-                    avgBPM = avgBPMSum / 10;
-                    countRegBPM = 0;
-                    avgBPMSum = 0;
-                }
-
-                BPMSerial = BPM;
-                avgBPMSerial = avgBPM;
-                
-                BPM = 0;
-                avgHeartRate = 0;
-                lastAvgHeartRate = 0;
-                xSemaphoreGive(semHeartBeat_Mutex);
-            }
-
-            memset(auxToSerial, 0, WORD_SIZE * 3);
-
-            sprintf(auxToSerial, "BPM: %u AVG BPM: %lu", BPMSerial, avgBPMSerial);
-
-            for (uint8_t i = 0;i < WORD_SIZE * 3;i += WORD_SIZE) {
-                if (xQueueSend(serialQueue, auxToSerial + i, GENERAL_DELAY) != pdTRUE) {
-                    // i -= WORD_SIZE;
-                }
-            }
-
-        } else  {
-            Serial.println("Cound't take the BPM semaphore!");
-        }
-    }
-}
-
-void taskWriteToSerial(void *parameter) {
-    char msg[WORD_SIZE] = "";
-    while (1) {
-        if (Serial.available()) {
-            memset(msg, 0, WORD_SIZE);
-            if (xQueueReceive(serialQueue, msg, GENERAL_DELAY)) {
-                Serial.println(msg);
-            }   
-        }
-    }
-}
-
-void taskShockSensor(void *parameter) {
-    char msg[] = "Shock detected!\n";
-
-    while(1) {
-        if (xSemaphoreTake(semShockSensor_ISR, GENERAL_DELAY) == pdTRUE) {
-            gpio_intr_disable((gpio_num_t)pinShock);
-            xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            vTaskResume(lightTaskHandle);
-            gpio_intr_enable((gpio_num_t)pinShock);
-        }
-    }
-}
-
-void taskTouchSensor(void *parameter) {
-    char msg[] = "Touch sensor t:)\n";
-
-    while (1) {
-        if (xSemaphoreTake(semTouchSensor_ISR, GENERAL_DELAY) == pdTRUE) {
-            gpio_intr_disable((gpio_num_t)pinTouch);
-            xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            vTaskSuspend(lightTaskHandle);
-            digitalWrite(LED_BUILT_IN, LOW);
-            gpio_intr_enable((gpio_num_t)pinTouch);
-        }
-    }
-}
-
-void taskLedLight(void *parameter) {
-    uint16_t blinkTime = 200;
-    while (1) {
-        digitalWrite(LED_BUILT_IN, HIGH);
-        vTaskDelay(pdMS_TO_TICKS(blinkTime));
-        digitalWrite(LED_BUILT_IN, LOW);
-        vTaskDelay(pdMS_TO_TICKS(blinkTime));
-    }
-}
-
-
 
 
 
