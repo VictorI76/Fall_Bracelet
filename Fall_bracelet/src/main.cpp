@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "task_and_dependencies.h"
+#include "BLE_Simplify.h"
 
 // Constants
 #define MAIN_CORE 1
@@ -87,6 +88,12 @@ void setup() {
     // Queue
     serialQueue = xQueueCreate(SERIAL_QUEUE_LENGTH, sizeof(char) * WORD_SIZE);
 
+    // BLE
+    initBLEServer();
+    ServiceAlarm();
+    ServiceData();
+    StartAdvertising();
+
     // Tasks
     if (HEART_SWITCH) {
         xTaskCreatePinnedToCore (
@@ -116,7 +123,7 @@ void setup() {
         xTaskCreatePinnedToCore (
             taskShockSensor,
             "Shock sensor triggered",
-            1024,
+            2048,
             NULL,
             3,
             NULL,
@@ -128,7 +135,7 @@ void setup() {
         xTaskCreatePinnedToCore (
             taskTouchSensor,
             "Touch sensor pressed",
-            1024,
+            2048,
             NULL,
             3,
             NULL,

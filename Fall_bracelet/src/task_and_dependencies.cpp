@@ -1,13 +1,12 @@
 #include "task_and_dependencies.h"
 
-
 // Pins
 uint8_t pinTouch = 36;
 uint8_t pinShock = 35;
 
 
 // Heart sensor
-volatile unsigned int BPM = 0;
+std::atomic<unsigned int> BPM{0};
 volatile unsigned long int avgBPM = 0;
 volatile uint16_t avgHeartRate = 0;
 volatile uint16_t lastAvgHeartRate = 0;
@@ -19,6 +18,9 @@ QueueHandle_t serialQueue;
 
 // Led/Light
 TaskHandle_t lightTaskHandle;
+
+// Shock + Touch
+std::atomic<unsigned int> alarmCode;
 
 // Semaphores
 volatile SemaphoreHandle_t semHeartBeat_ISR = NULL;
@@ -45,6 +47,9 @@ void taskHeartBeat(void *parameter) {
 
             if (xSemaphoreTake(semHeartBeat_Mutex, GENERAL_DELAY) == pdTRUE) {
                 BPM = BPM * 6;
+                
+                pHeartRateCharacteristic->notify();
+                
                 avgBPMSum += BPM;
                 countRegBPM++;
                 if (countRegBPM == 10) {
@@ -97,6 +102,8 @@ void taskShockSensor(void *parameter) {
         if (xSemaphoreTake(semShockSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             gpio_intr_disable((gpio_num_t)pinShock);
             xQueueSend(serialQueue, msg, GENERAL_DELAY);
+            alarmCode = 1;
+            pAlarmCharacteristic->notify();
             vTaskResume(lightTaskHandle);
             gpio_intr_enable((gpio_num_t)pinShock);
         }
@@ -110,6 +117,8 @@ void taskTouchSensor(void *parameter) {
         if (xSemaphoreTake(semTouchSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             gpio_intr_disable((gpio_num_t)pinTouch);
             xQueueSend(serialQueue, msg, GENERAL_DELAY);
+            alarmCode = 0;
+            pAlarmCharacteristic->notify();
             vTaskSuspend(lightTaskHandle);
             digitalWrite(LED_BUILT_IN, LOW);
             gpio_intr_enable((gpio_num_t)pinTouch);

@@ -1,12 +1,14 @@
 // #ifndef TASK_
 // #define TASK_
-
+#pragma once
 #include <Arduino.h>
+#include <atomic>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 #include "freertos/timers.h"
+#include "BLE_Simplify.h"
 
 // Defines
 #define LED_BUILT_IN 2
@@ -18,7 +20,7 @@ extern uint8_t pinTouch;
 extern uint8_t pinShock;
 
 // Heart sensor
-extern volatile unsigned int BPM;
+extern std::atomic<unsigned int> BPM;
 extern volatile unsigned long int avgBPM;
 extern volatile uint16_t avgHeartRate;
 extern volatile uint16_t lastAvgHeartRate;
@@ -30,6 +32,9 @@ extern QueueHandle_t serialQueue;
 
 // Led/Light
 extern TaskHandle_t lightTaskHandle;
+
+// Shock + Touch
+extern std::atomic<unsigned int> alarmCode;
 
 // Semaphores
 extern volatile SemaphoreHandle_t semHeartBeat_ISR;
