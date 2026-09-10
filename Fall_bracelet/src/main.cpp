@@ -51,9 +51,6 @@ static const uint64_t timer_frequency0 = 1000000; // => 1MHz
 static const uint64_t timer_max_count0 = 100000; // => 100ms
 static hw_timer_t *timer_hw0 = NULL;
 
-// Spinlock
-portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
-
 // ISR
 void IRAM_ATTR onTimer0(void);
 void IRAM_ATTR onShock(void);
