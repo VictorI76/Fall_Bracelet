@@ -21,10 +21,10 @@ extern uint8_t pinShock;
 
 // Heart sensor
 extern std::atomic<unsigned int> BPM;
-extern volatile unsigned long int avgBPM;
+extern std::atomic<unsigned int> avgBPM;
 extern volatile uint16_t avgHeartRate;
 extern volatile uint16_t lastAvgHeartRate;
-extern uint32_t avgBPMSum;
+extern unsigned int avgBPMSum;
 extern uint32_t countRegBPM;
 
 // Serial

@@ -7,10 +7,10 @@ uint8_t pinShock = 35;
 
 // Heart sensor
 std::atomic<unsigned int> BPM{0};
-volatile unsigned long int avgBPM = 0;
+std::atomic<unsigned int> avgBPM{0};
 volatile uint16_t avgHeartRate = 0;
 volatile uint16_t lastAvgHeartRate = 0;
-uint32_t avgBPMSum = 0;
+unsigned int avgBPMSum{0};
 uint32_t countRegBPM = 0;
 
 // Serial
@@ -47,8 +47,6 @@ void taskHeartBeat(void *parameter) {
 
             if (xSemaphoreTake(semHeartBeat_Mutex, GENERAL_DELAY) == pdTRUE) {
                 BPM = BPM * 6;
-                
-                pHeartRateCharacteristic->notify();
                 
                 avgBPMSum += BPM;
                 countRegBPM++;
@@ -102,9 +100,15 @@ void taskShockSensor(void *parameter) {
         if (xSemaphoreTake(semShockSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             gpio_intr_disable((gpio_num_t)pinShock);
             xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            alarmCode = 1;
-            pAlarmCharacteristic->notify();
-            vTaskResume(lightTaskHandle);
+            if (alarmCode == 0) {
+                
+                // BLE alarm notifiction
+                alarmCode = 1;
+                pAlarmCharacteristic->notify();
+
+                // Led
+                vTaskResume(lightTaskHandle);
+            }
             gpio_intr_enable((gpio_num_t)pinShock);
         }
     }
@@ -116,11 +120,23 @@ void taskTouchSensor(void *parameter) {
     while (1) {
         if (xSemaphoreTake(semTouchSensor_ISR, GENERAL_DELAY) == pdTRUE) {
             gpio_intr_disable((gpio_num_t)pinTouch);
-            xQueueSend(serialQueue, msg, GENERAL_DELAY);
-            alarmCode = 0;
-            pAlarmCharacteristic->notify();
-            vTaskSuspend(lightTaskHandle);
-            digitalWrite(LED_BUILT_IN, LOW);
+            
+            // Serial message
+            xQueueSend(serialQueue, msg, GENERAL_DELAY);               
+
+            if (alarmCode == 1) {
+                // BLE alarm notification
+                alarmCode = 0;
+                pAlarmCharacteristic->notify();                    
+                
+                // Led
+                vTaskSuspend(lightTaskHandle);
+                digitalWrite(LED_BUILT_IN, LOW);          
+            } else {
+                // BLE heart rate notification
+                pHeartRateCharacteristic->notify();
+            }
+            
             gpio_intr_enable((gpio_num_t)pinTouch);
         }
     }

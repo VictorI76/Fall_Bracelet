@@ -19,6 +19,8 @@ extern BLECharacteristic *pAlarmCharacteristic;
 extern BLECharacteristic *pHeartRateCharacteristic;
 
 extern std::atomic<unsigned int> BPM;
+extern std::atomic<unsigned int> avgBPM;
+
 
 extern std::atomic<unsigned int> alarmCode;
 

@@ -45,12 +45,12 @@ class AlarmCharacteristicCallback : public BLECharacteristicCallbacks {
 
 class HeartRateCharacteristicCallback : public BLECharacteristicCallbacks {
     void onNotify(BLECharacteristic * pCharacteristic) {
-        uint32_t output = BPM;
+        uint32_t output = avgBPM;
         pCharacteristic->setValue(output);
     }
 
     void onRead(BLECharacteristic * pCharacteristic) {
-        uint32_t output = BPM;
+        uint32_t output = avgBPM;
         pCharacteristic->setValue(output);
     }
 };

@@ -7,7 +7,7 @@
 #define SERIAL_QUEUE_LENGTH 20
 
 //  Task ON/OFF
-#define HEART_SWITCH false
+#define HEART_SWITCH true
 #define WRITE_SERIAL_SWITCH true
 #define SHOCK_SWITCH true
 #define TOUCH_SWITCH true
@@ -170,13 +170,6 @@ void IRAM_ATTR onTimer0(void) {
     BaseType_t task_woken = pdFALSE;
 
     heartRate = analogRead(pinHeartBeat);
-
-    // char aux[WORD_SIZE];
-
-    // itoa(heartRate, aux, 10);
-    // strcat(aux, ",");
-
-    // xQueueSendFromISR(serialQueue, aux, &task_woken);
 
     if (heartRate > 500 && timeOut <= 0) {
         
